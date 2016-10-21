@@ -1,0 +1,27 @@
+---
+title: "Exploratory Data Analysis"
+output: html_notebook
+---
+
+```{r setup, echo=FALSE, message=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = TRUE,
+	warning = TRUE
+)
+library(tidyverse)
+dataPath <- file.path(dirname(getwd()), 'data')
+```
+
+```{r read in data, message = FALSE}
+exam_data <- read_csv(file.path(dataPath, 'ExamRatingData072516.csv'))
+equipment_data <- read_csv(file.path(dataPath, 'ProviderEquipmentData072516.csv'))
+subspecial_data <- read_csv(file.path(dataPath, 'ProviderSubspecializationData072516.csv'))
+```
+
+```{r}
+names(exam_data)
+names(equipment_data)
+names(subspecial_data)
+```
+
