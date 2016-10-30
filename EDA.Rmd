@@ -1,6 +1,8 @@
 ---
 title: "Exploratory Data Analysis"
-output: html_notebook
+output:
+  html_notebook: default
+  html_document: default
 ---
 
 ```{r setup, echo=FALSE, message=FALSE}
@@ -13,10 +15,12 @@ dataPath <- file.path(dirname(getwd()), 'data')
 ```
 
 ```{r, message = FALSE}
+library(matrixStats)
 library(tidyverse)
 library(stringr)
 library(lubridate)
 library(scales)
+library(boot)
 ```
 
 ```{r read in data, message = FALSE}
@@ -75,15 +79,140 @@ exam_data %>%
   colSums
 ```
 
+Luckily, each exam has two different reviewer IDs, and the Sex, Age, and body part are the same accross all reviewers for the same exam.
+
+I also decided to create some accuracy metrics of my own.  I wanted to look at False Positive Rate, $FPR = \frac{FP}{FP+TN}$, False Negative Rate, $FNR = \frac{FN}{FN+TP}$, and total error rate $errR = \frac{FN+FP}{FN+FP+TN+TP}$.  I also created significance weighed versions of these metrics, where the error is 0 if `RadPeer.Significance.of.Errors` is 0 or `NA`.
+
 ```{r}
-summaries1 <- exam_data %>%
+exam_data <- exam_data %>%
+  mutate(Neg.Count = False.Positive.Count + True.Negative.Count,
+         Pos.Count = False.Negative.Count + True.Positive.Count, 
+         Tot.Count = Neg.Count + Pos.Count,
+         FPR = False.Positive.Count / Neg.Count,
+         FNR = False.Negative.Count / Pos.Count,
+         errR = Total.Diagnostic.Errors / Tot.Count,
+         sigErr = as.numeric(coalesce(RadPeer.Significance.of.Errors, 0L)),
+         w.FPR = sigErr * FPR,
+         w.FNR = sigErr * FNR,
+         w.errR = sigErr * errR)
+```
+
+
+Therefore, to make sure each exam has equal weighting, I average the data about each exam that shows up multiple times. 
+
+```{r}
+each_exam_data1 <- exam_data %>%
   group_by(Exam.ID, Provider.ID) %>%
-  summarise_at(c(4:5, 7:12), mean, na.rm = T) %>%
+  summarise_at(c(4:5, 7:12, 17:26), mean, na.rm = T) %>%
   mutate_all(na_if, y= 'NaN')
+each_exam_data1 <- exam_data %>%
+  select(c(1:2, 13:16)) %>%
+  distinct() %>%
+  inner_join(each_exam_data1, by = c("Exam.ID", "Provider.ID"))
+```
+
+Now we can aggregate the exam date across each provider. For now, I am looking at mean and median.
+
+```{r, eval=FALSE, include=FALSE}
+ProviderSummary <- each_exam_data1 %>% 
+  group_by(Provider.ID) %>%
+  summarize_at(.cols = c('RadPeer.Score', 'Technical.Performance.Score'), .funs = c('mean', 'median'), na.rm = T)
+ProviderSummary <- each_exam_data1 %>%
+  count(Provider.ID) %>%
+  inner_join(ProviderSummary, by = "Provider.ID")
 ```
 
 ```{r}
-describ_data <- exam_data %>%
-  distinct(Exam.ID, Provider.ID, .keep_all = TRUE)
+ProviderSummary <- each_exam_data1 %>% 
+  group_by(Provider.ID) %>%
+  summarize_at(.cols = c('RadPeer.Score', 'Technical.Performance.Score'), .funs = c('mean'), na.rm = T)
+ProviderSummary <- each_exam_data1 %>%
+  count(Provider.ID) %>%
+  rename(nExams = n) %>%
+  inner_join(ProviderSummary, by = "Provider.ID")
+ProviderSummary <- each_exam_data1 %>% 
+  group_by(Provider.ID) %>%
+  summarize_at(.cols = vars(Total.Diagnostic.Errors, False.Positive.Count, False.Negative.Count,
+               True.Negative.Count, True.Positive.Count, Neg.Count, Pos.Count, Tot.Count), sum, na.rm = T) %>%
+  inner_join(ProviderSummary, ., by = 'Provider.ID')
+ProviderSummary <- each_exam_data1 %>% 
+  group_by(Provider.ID) %>%
+  summarize(FPR = weighted.mean(FPR, Neg.Count, na.rm = T),
+            w.FPR = weighted.mean(w.FPR, Neg.Count, na.rm = T),
+            FNR = weighted.mean(FNR, Pos.Count, na.rm = T),
+            w.FPR = weighted.mean(w.FNR, Pos.Count, na.rm = T),
+            errR = weighted.mean(errR, Tot.Count, na.rm = T),
+            w.errR = weighted.mean(w.errR, Tot.Count, na.rm = T)) %>%
+  inner_join(ProviderSummary, ., by = 'Provider.ID')
 ```
+
+I want to start analysis by looking at `RadPeer.Score` and `Technical.Performance.Score`, since the other measures have missing variables for many providers.  Before doing anything complicated, I am curious to look at the correlation between the two measures.
+
+```{r}
+paste('Correlation of Means:', round(with(ProviderSummary, cor(x = RadPeer.Score_mean, y = Technical.Performance.Score_mean)), 3))
+paste('Correlation of Medians:', round(with(ProviderSummary, cor(x = RadPeer.Score_median, y = Technical.Performance.Score_median)), 3))
+```
+
+```{r}
+ProviderSummary %>% 
+  select(Provider.ID, RadPeer.Score_mean, RadPeer.Score_median, 
+         Technical.Performance.Score_mean, Technical.Performance.Score_median) %>% 
+  gather(key = 'metric', value = 'score', -Provider.ID) %>% 
+  separate(col = metric, into = c('metric', 'summType'), sep = "_") %>% 
+  spread(key = metric, value = score) %>%
+  ggplot(data = ., mapping = aes(x = RadPeer.Score, y = Technical.Performance.Score)) +
+  geom_point() +
+  facet_grid(. ~ summType) +
+  theme_light() +
+  labs(title = 'Scatter plot of Provider Score')
+```
+
+These correlations are surprisingly low to me - while a positive correlation does make more sense than a negative one, I'd have expected it to be closer to 1 than it actually is.
+
+One problem may be the many Providers that have very few exams.
+
+```{r}
+summary(ProviderSummary$n)
+```
+
+While 25% of Providers have only 1 exam, a different 25% have 6 or more exams, with one provider having as many as 56.  Now, I'd like to consider looking at the correlation statistic weighted by # of exams.
+
+```{r}
+ProviderSummary %>% 
+  select(RadPeer.Score_mean, Technical.Performance.Score_mean) %>% 
+  corr(w = ProviderSummary$n) %>% round(3) %>%
+  paste('Weighted Correlation of Means:', .)
+ProviderSummary %>% 
+  select(RadPeer.Score_median, Technical.Performance.Score_median) %>% 
+  corr(w = ProviderSummary$n) %>% round(3) %>%
+  paste('Weighted Correlation of Medians:', .)
+
+```
+
+These correlations are a bit higher.  I'm still a bit surprised by how low they are, but it's not as tiny as before.
+
+```{r, eval=FALSE, include=FALSE}
+ProviderSummary %>% 
+  select(Provider.ID, RadPeer.Score_mean, RadPeer.Score_median, 
+         Technical.Performance.Score_mean, Technical.Performance.Score_median, n) %>% 
+  gather(key = 'metric', value = 'score', -Provider.ID, -n) %>% 
+  separate(col = metric, into = c('metric', 'summType'), sep = "_") %>% 
+  spread(key = metric, value = score) %>%
+  ggplot(data = ., mapping = aes(x = RadPeer.Score, y = Technical.Performance.Score, size = n)) +
+  geom_jitter(width = 0.1, height = 0.1) +
+  facet_grid(. ~ summType) +
+  theme_light() +
+  labs(title = 'Scatter plot of Provider Score', size = '# Exams')
+```
+
+```{r}
+ProviderSummary %>% 
+  ggplot(data = ., mapping = aes(x = RadPeer.Score_mean, y = Technical.Performance.Score_mean, size = n)) +
+  geom_point() +
+  theme_light() +
+  labs(title = 'Scatter plot of Provider Score Means', size = '# Exams')
+```
+
+One interesting thing we can see from this scatter plot is that there are a lot of providers with scores clustered around 1.0 to 1.5 in both metrics, including some of those with the most exams.
+
 
