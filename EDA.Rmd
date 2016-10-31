@@ -265,3 +265,12 @@ kMeans2a
 ```
 
 Here, we account for 28.8% of the sum of squares, which is negligably higher.
+
+### Look at Other Features
+
+```{r}
+SubSpecial <- data1 %>%
+  select(Provider.ID, cluster1, cluster2) %>%
+  inner_join(subspecial_data, by = 'Provider.ID')
+```
+
