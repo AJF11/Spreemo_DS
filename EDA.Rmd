@@ -7,7 +7,11 @@ output:
   html_document: default
 ---
 
+***
+
 ## Data Science Exercise for Spreemo
+
+***
 
 ### Introduction
 
@@ -103,7 +107,7 @@ exam_data %>%
 
 Luckily, each exam has two different reviewer IDs, and the Sex, Age, and body part are the same across all reviewers for the same exam. This could have been a source of data errors, but it seems to be complete.
 
-### Feature Selection
+#### Feature Creation
 
 I also decided to create some accuracy metrics of my own.  I wanted to look at False Positive Rate, $FPR = \frac{FP}{FP+TN}$, False Negative Rate, $FNR = \frac{FN}{FN+TP}$, and total error rate $errR = \frac{FN+FP}{FN+FP+TN+TP}$.  I also created significance weighed versions of these metrics, where the error is 0 if `RadPeer.Significance.of.Errors` is 0 or `NA`.
 
@@ -140,17 +144,18 @@ Now we can aggregate the exam date across each provider. I will use the mean to 
 ```{r}
 ProviderSummary <- each_exam_data1 %>% 
   group_by(Provider.ID) %>%
-  summarize_at(.cols = c('RadPeer.Score', 'Technical.Performance.Score'),
-               .funs = c('mean'), na.rm = T)
+  summarize_at(vars(RadPeer.Score, Technical.Performance.Score), 
+               mean, na.rm = T)
 ProviderSummary <- each_exam_data1 %>%
   count(Provider.ID) %>%
   rename(nExams = n) %>%
   inner_join(ProviderSummary, by = "Provider.ID")
 ProviderSummary <- each_exam_data1 %>% 
   group_by(Provider.ID) %>%
-  summarize_at(.cols = vars(Total.Diagnostic.Errors, False.Positive.Count,
-                            False.Negative.Count, True.Negative.Count, True.Positive.Count, Neg.Count, 
-                            Pos.Count, Tot.Count), sum, na.rm = T) %>%
+  summarize_at(vars(Total.Diagnostic.Errors, False.Positive.Count,
+                    False.Negative.Count, True.Negative.Count, 
+                    True.Positive.Count, Neg.Count, Pos.Count, Tot.Count), 
+               sum, na.rm = T) %>%
   inner_join(ProviderSummary, ., by = 'Provider.ID')
 ProviderSummary <- each_exam_data1 %>% 
   group_by(Provider.ID) %>%
@@ -163,23 +168,29 @@ ProviderSummary <- each_exam_data1 %>%
   inner_join(ProviderSummary, ., by = 'Provider.ID')
 ```
 
-I want to start analysis by looking at `RadPeer.Score` and `Technical.Performance.Score`, since the other measures have missing variables for many providers.  Before doing anything complicated, I am curious to look at the correlation between the two measures.
+####More Exploration
+
+I want to start by looking at `RadPeer.Score` and `Technical.Performance.Score`, since the other measures have missing variables for many providers.  Before doing anything complicated, I am curious to look at the correlation between the two measures.
 
 ```{r}
-paste('Correlation of Means:', round(with(ProviderSummary, cor(x = RadPeer.Score, y = Technical.Performance.Score)), 3))
+ProviderSummary %>% 
+  with(cor(x = RadPeer.Score, y = Technical.Performance.Score)) %>%
+  round(3) %>%
+  paste('Correlation of Means:', .)
 ```
 
 ```{r}
 ProviderSummary %>% 
   ggplot(data = ., mapping = aes(x = RadPeer.Score, y = Technical.Performance.Score)) +
   geom_point() +
+  geom_smooth(method = 'lm', se = FALSE) + 
   theme_light() +
   labs(title = 'Scatter plot of Provider Score')
 ```
 
 These correlations are surprisingly low to me - while a positive correlation does make more sense than a negative one, I'd have expected it to be closer to 1 than it actually is.
 
-One problem may be the many Providers that have very few exams.
+One problem may be the many Providers that have very few exams, while others have many more.
 
 ```{r}
 summary(ProviderSummary$nExams)
@@ -198,13 +209,17 @@ These correlations are a bit higher.  I'm still a bit surprised by how low they 
 
 ```{r}
 ProviderSummary %>% 
-  ggplot(data = ., mapping = aes(x = RadPeer.Score, y = Technical.Performance.Score, size = nExams)) +
-  geom_point() +
+  ggplot(data = ., mapping = aes(x = RadPeer.Score, y = Technical.Performance.Score)) +
+  geom_point(aes(size = nExams)) +
+  geom_smooth(method = 'lm', se = FALSE,
+              aes(weight = ProviderSummary$nExams)) +
   theme_light() +
   labs(title = 'Scatter plot of Provider Score Means', size = '# Exams')
 ```
 
 One interesting thing we can see from this scatter plot is that there are a lot of providers with scores clustered around 1.0 to 1.5 in both metrics, including some of those with the most exams.
+
+The following is a look at weighted correlations between the official metrics (`RadPeer` and `Technical.Performance`) and the ones I created.
 
 ```{r}
 corrWRP <- function(score1, col1, col2){
@@ -244,7 +259,7 @@ There are two things interesting to me about these correlations:
     + This does not surprise me as much, since the `RadPeer` metric is explicitly based on accuracy.  
     + However, I am surprised by how low the correlation with `Technical.Performance` is.
 
-#### Clustering
+### Clustering
     
 Now let's try to do a little clustering.  First, we will impute the missing values of `FPR`, `FNR`, etc... to the mean of each column, and then center and scale it.
     
@@ -264,41 +279,58 @@ data1 <- ProviderSummary %>%
          w.FPR2 = coalesce((w.FPR - toScale$w.FPR_mean) / toScale$w.FPR_sd, 0),
          w.FNR2 = coalesce((w.FNR - toScale$w.FNR_mean) / toScale$w.FNR_sd, 0),
          w.errR2 = coalesce((w.errR - toScale$w.errR_mean) / toScale$errR_sd, 0))
+```
 
+```{r}
 set.seed(8927489)
 kMeans2 <- data1 %>% select(11:18) %>% kmeans(2, nstart = 20)
-data1[['cluster1']] <- kMeans2$cluster
-data1 <- data1 %>% mutate(cluster1 = if_else(cluster1 == 1, 'good', 'bad'))
 kMeans2
 ```
 
 When creating this cluster, we can see that the clustering accounts for 28.4% of the sum of squares.  We can also see that cluster 1 is the "good" cluster, since the cluster means are lower.
 
-We can also weight each point by the number of exams by expanding each Provider to the size of it's number of exams.
+```{r}
+data1[['cluster1']] <- kMeans2$cluster
+data1 <- data1 %>% mutate(cluster1 = if_else(cluster1 == 1, 'good', 'bad'))
+```
+
+We can also create a different cluster by weighting each point by the number of exams.  We do this by expanding each Provider to the size of its number of exams.
 
 ```{r}
 data2 <- data1 %>% select(c(1:2, 11:18)) %>% expandRows('nExams')
 kMeans2a <- data2 %>%
   select(-Provider.ID) %>%
   kmeans(2, nstart = 20)
+kMeans2a
+```
+
+Here, we account for 28.8% of the sum of squares, which is negligably higher.  It is also more balanced, as `r scales::percent(kMeans2a$size[[2]]/sum(kMeans2a$size))` of the providers are in the smaller bucket, as opposed to `r scales::percent(kMeans2$size[[2]]/sum(kMeans2$size))` in the larger bucket.  Bucket 1 is the "good" cluster again.
+
+```{r}
 data2[['cluster2']] <- kMeans2a$cluster
 clust2 <- data2 %>% distinct(Provider.ID, cluster2) %>%
   mutate(cluster2 = if_else(cluster2 == 1, 'good', 'bad'))
 data1 <- data1 %>% left_join(clust2, by = "Provider.ID")
-kMeans2a
 ```
 
-Here, we account for 28.8% of the sum of squares, which is negligably higher.
 
 ```{r}
-ggplot(data1, aes(x = RadPeer.Score, y = Technical.Performance.Score, size = nExams, color = cluster2)) +
-  geom_point() +
+centers1 <- kMeans2a$centers[,1:2] %>% 
+  data.frame %>%
+  mutate(RadPeer.Score = (RadPeer.Score2 * toScale$RadPeer.Score_sd) + toScale$RadPeer.Score_mean, 
+         Technical.Performance.Score = (Technical.Performance.Score2 * toScale$Technical.Performance.Score_sd) + toScale$Technical.Performance.Score_mean,
+         cluster2 = c('good', 'bad'))
+ggplot(data1, aes(x = RadPeer.Score, y = Technical.Performance.Score, color = cluster2)) +
+  geom_point(aes(size = nExams)) +
   theme_light() +
+  geom_point(data = centers1, aes(RadPeer.Score, Technical.Performance.Score),
+             shape = 10, size= 4, color = c('darkblue', 'darkred')) +
   labs(title = 'Scatter plot of Provider Score Means', size = '# Exams', color = 'Cluster')
 ```
 
+The darker bulls-eyes in the graph above represents the centroids of the clusters.
 
-### Look at Other Features
+### Compare clusters to other characteristics of the Providers
 
 ```{r}
 SubSpecial <- data1 %>%
