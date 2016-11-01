@@ -1,9 +1,21 @@
 ---
-title: "Exploratory Data Analysis"
+title: "Data Analysis of Exam Data"
+author: "Alan Feder"
+date: "November 1, 2016"
 output:
-  html_document: default
   html_notebook: default
+  html_document: default
 ---
+
+## Data Science Exercise for Spreemo
+
+### Introduction
+
+The purpose of this analysis is to look at reviews of exams and use them to assess the quality of providers.  Furthermore, we look at attributes of the providers, such as imaging equipment and sub-specializations.
+
+The following analysis is done in `R`, using the `RMarkdown` format.
+
+### Setup
 
 ```{r setup, echo=FALSE, message=FALSE}
 knitr::opts_chunk$set(
@@ -14,18 +26,22 @@ knitr::opts_chunk$set(
 dataPath <- file.path(dirname(getwd()), 'data')
 ```
 
+I like to start out by loading all necessary external packages.
+
 ```{r, message = FALSE}
+library(dtplyr)
 library(data.table)
 library(splitstackshape)
-library(dtplyr)
-library(matrixStats)
-library(tidyverse)
+library(ggplot2)
+library(tidyr)
+library(readr)
+library(dplyr)
 library(stringr)
-library(lubridate)
 library(scales)
 library(boot)
-library(caret)
 ```
+
+I then read in all raw data files.
 
 ```{r read in data, message = FALSE}
 exam_data <- read_csv(file.path(dataPath, 'ExamRatingData072516.csv'))
@@ -39,22 +55,23 @@ names(equipment_data)
 names(subspecial_data)
 ```
 
+### Exploratory Data Analysis
+
 Let's start by taking a quick glance at the exam data file.
 
 ```{r}
-head(exam_data, 10) %>% knitr::kable(align = 'c')
+head(exam_data, 10) %>% as.data.frame()
 ```
 
 So we can see that the first column is an Exam ID, the second column is a Provider IS.  We can see that there are sometimes multiple Reviewer IDs for one exam.  We can also see that there are a number of missing variables.
 
 ```{r}
 exam_data %>%
-  select(c(4:5, 7:12)) %>%
   is.na %>%
   colMeans
 ```
 
-Certain variables -- such as the scores -- are complete, while other ones are missing more than 50% of the information. 
+Certain variables -- such as the scores -- are complete, while other ones are missing more than 50% of the information. While some of the missing `RadPeer.Significance.of.Errors` are due to the reviewer not seeing any errors, it seems as if some exams have no information about correct/incorrect diagnoses.
 
 I also wanted to see how many claims have multiple reviews.
 
@@ -63,7 +80,8 @@ exam_data %>%
   count(Exam.ID, Provider.ID) %>%
   ungroup %>%
   count(n) %>%
-  mutate(pct = percent(nn/ sum(nn)))
+  mutate(pct = percent(nn/ sum(nn))) %>%
+  knitr::kable(align = 'c')
 ```
 
 While most Exam IDs have only one reviewer, 16.5% have two, and none have more than two.
@@ -83,7 +101,9 @@ exam_data %>%
   colSums
 ```
 
-Luckily, each exam has two different reviewer IDs, and the Sex, Age, and body part are the same accross all reviewers for the same exam.
+Luckily, each exam has two different reviewer IDs, and the Sex, Age, and body part are the same across all reviewers for the same exam. This could have been a source of data errors, but it seems to be complete.
+
+### Feature Selection
 
 I also decided to create some accuracy metrics of my own.  I wanted to look at False Positive Rate, $FPR = \frac{FP}{FP+TN}$, False Negative Rate, $FNR = \frac{FN}{FN+TP}$, and total error rate $errR = \frac{FN+FP}{FN+FP+TN+TP}$.  I also created significance weighed versions of these metrics, where the error is 0 if `RadPeer.Significance.of.Errors` is 0 or `NA`.
 
@@ -102,7 +122,7 @@ exam_data <- exam_data %>%
 ```
 
 
-Therefore, to make sure each exam has equal weighting, I average the data about each exam that shows up multiple times. 
+Therefore, to make sure each exam has equal weighting, I average the data for each exam that shows up multiple times. 
 
 ```{r}
 each_exam_data1 <- exam_data %>%
@@ -115,20 +135,22 @@ each_exam_data1 <- exam_data %>%
   inner_join(each_exam_data1, by = c("Exam.ID", "Provider.ID"))
 ```
 
-Now we can aggregate the exam date across each provider. I will use mean to average them. 
+Now we can aggregate the exam date across each provider. I will use the mean to average them. 
 
 ```{r}
 ProviderSummary <- each_exam_data1 %>% 
   group_by(Provider.ID) %>%
-  summarize_at(.cols = c('RadPeer.Score', 'Technical.Performance.Score'), .funs = c('mean'), na.rm = T)
+  summarize_at(.cols = c('RadPeer.Score', 'Technical.Performance.Score'),
+               .funs = c('mean'), na.rm = T)
 ProviderSummary <- each_exam_data1 %>%
   count(Provider.ID) %>%
   rename(nExams = n) %>%
   inner_join(ProviderSummary, by = "Provider.ID")
 ProviderSummary <- each_exam_data1 %>% 
   group_by(Provider.ID) %>%
-  summarize_at(.cols = vars(Total.Diagnostic.Errors, False.Positive.Count, False.Negative.Count,
-               True.Negative.Count, True.Positive.Count, Neg.Count, Pos.Count, Tot.Count), sum, na.rm = T) %>%
+  summarize_at(.cols = vars(Total.Diagnostic.Errors, False.Positive.Count,
+                            False.Negative.Count, True.Negative.Count, True.Positive.Count, Neg.Count, 
+                            Pos.Count, Tot.Count), sum, na.rm = T) %>%
   inner_join(ProviderSummary, ., by = 'Provider.ID')
 ProviderSummary <- each_exam_data1 %>% 
   group_by(Provider.ID) %>%
