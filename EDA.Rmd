@@ -3,8 +3,8 @@ title: "Data Analysis of Exam Data"
 author: "Alan Feder"
 date: "November 1, 2016"
 output:
-  html_notebook: default
   html_document: default
+  html_notebook: default
 ---
 
 ***
@@ -332,16 +332,24 @@ The darker bulls-eyes in the graph above represents the centroids of the cluster
 
 ### Compare clusters to other characteristics of the Providers
 
+#### Subspecializations
+
 ```{r}
 SubSpecial <- data1 %>%
   select(Provider.ID, cluster1, cluster2) %>%
   inner_join(subspecial_data, by = 'Provider.ID')
-SubSpecial %>% count(Is.Subspecialized, cluster1) %>% mutate(pct = percent(n/sum(n)), n = sum(n)) %>% spread(cluster1, pct) 
-SubSpecial %>% count(Is.Subspecialized, cluster2) %>% mutate(pct = percent(n/sum(n)), n = sum(n)) %>% spread(cluster2, pct) 
+SubSpecial %>%
+  count(Is.Subspecialized, cluster2) %>% 
+  mutate(pct = percent(n/sum(n)), n = sum(n)) %>%
+  spread(cluster2, pct) %>%
+  knitr::kable(align = 'c')
 ```
 
-Looking at subspecializations, there seems to be a notable difference, especially with the cluster 2 -- where less than 65% of the non-subspecialized providers are "good", but almost 80% of the sub-specialized ones are good
+Looking at subspecializations, there seems to be a notable difference, where less than 65% of the non-subspecialized providers are "good", but almost 80% of the sub-specialized ones are good
 
+#### MRI Equipment
+
+##### MRI Machine Type
 
 ```{r}
 equipData <- data1 %>%
@@ -350,10 +358,13 @@ equipData <- data1 %>%
 equipData %>% 
   count(MRI.machine.type, cluster2) %>%
   mutate(pct = percent(n/sum(n)), n = sum(n)) %>%
-  spread(cluster2, pct)
+  spread(cluster2, pct) %>%
+  knitr::kable(align = 'c')
 ```
 
-There seem to be more significant connections between `MRI.machine.type` and cluster, where 90.9% of Stand-Up machines get clustered as bad, while 83.1% of Semi-Open Wide Bore machines get clustered as good.  Open machines seem to be a bit more mixed, at 65% good, Closed machines are almost as good as Semi-Open Wide Bore machines, and there are not enough Extremity machines to get a good look
+There seem to be more significant connections between `MRI.machine.type` and cluster2, where 90.9% of Stand-Up machines get clustered as bad, while 83.1% of Semi-Open Wide Bore machines get clustered as good.  Open machines seem to be a bit more mixed, at 65% good, Closed machines are almost as good as Semi-Open Wide Bore machines, and there are not enough Extremity machines to get a good look
+
+##### MRI Magnet Strength
 
 Finally, let's take a quick look at `MRI.magnet.strength`.
 
@@ -364,7 +375,9 @@ equipData %>%
   facet_grid(cluster2 ~ .) +
   theme_light() +
   coord_cartesian(xlim = c(0.2, 3)) +
-  scale_x_continuous(expand = c(0, 0))
+  scale_x_continuous(expand = c(0, 0)) +
+  labs(title = 'Density Plot of MRI Magnet Strength, Split by Cluster',
+       y = '')
 ```
 
 Looking at a smoothed density plot, the distribution of Magnet Strength between the two clusters are fairly similar, although the 'good' cluster seems to be a bit higher.
@@ -384,7 +397,8 @@ equipData %>%
   mutate(cluster2 = if_else(cluster2 == 'good', 1, 0)) %>%
   ggplot(aes(x = MRI.magnet.strength, y = cluster2))+
   geom_jitter(height = 0.1, width = 0, alpha = 0.1, aes(size = nExams)) +
-  geom_line(data = plotData, aes(x = MRI.magnet.strength, y = fitted.y, color = 'fitted glm')) +
+  geom_line(data = plotData, 
+            aes(x = MRI.magnet.strength, y = fitted.y, color = 'fitted\nlogistic')) +
   theme_light() +
   labs(title = 'Jitter plot with fitted logistic regression curve',
        size = '# Exams', y = 'Cluster 2 ("good" = 1)', color = '')
@@ -392,3 +406,9 @@ equipData %>%
 ```
 
 This logistic regression makes it a bit more obvious that a higher magnet strength leads to a higher likelihood of being classifies 'good'.
+
+### Conclusion
+
+
+
+
