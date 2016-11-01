@@ -42,7 +42,7 @@ names(subspecial_data)
 Let's start by taking a quick glance at the exam data file.
 
 ```{r}
-head(exam_data, 10)
+head(exam_data, 10) %>% knitr::kable(align = 'c')
 ```
 
 So we can see that the first column is an Exam ID, the second column is a Provider IS.  We can see that there are sometimes multiple Reviewer IDs for one exam.  We can also see that there are a number of missing variables.
@@ -234,37 +234,47 @@ toScale <- ProviderSummary %>%
 data1 <- ProviderSummary %>%
   select(Provider.ID, nExams, RadPeer.Score, Technical.Performance.Score,
          FPR, w.FPR, FNR, w.FNR, errR, w.errR) %>%
-  mutate(RadPeer.Score = (RadPeer.Score - toScale$RadPeer.Score_mean) / toScale$RadPeer.Score_sd,
-         Technical.Performance.Score = (Technical.Performance.Score - toScale$Technical.Performance.Score_mean) / toScale$Technical.Performance.Score_sd,
-         FPR = coalesce((FPR - toScale$FPR_mean) / toScale$FPR_sd, 0),
-         FNR = coalesce((FNR - toScale$FNR_mean) / toScale$FNR_sd, 0),
-         errR = coalesce((errR - toScale$errR_mean) / toScale$errR_sd, 0),
-         w.FPR = coalesce((w.FPR - toScale$w.FPR_mean) / toScale$w.FPR_sd, 0),
-         w.FNR = coalesce((w.FNR - toScale$w.FNR_mean) / toScale$w.FNR_sd, 0),
-         w.errR = coalesce((w.errR - toScale$w.errR_mean) / toScale$errR_sd, 0))
+  mutate(RadPeer.Score2 = (RadPeer.Score - toScale$RadPeer.Score_mean) / toScale$RadPeer.Score_sd,
+         Technical.Performance.Score2 = (Technical.Performance.Score - toScale$Technical.Performance.Score_mean) / toScale$Technical.Performance.Score_sd,
+         FPR2 = coalesce((FPR - toScale$FPR_mean) / toScale$FPR_sd, 0),
+         FNR2 = coalesce((FNR - toScale$FNR_mean) / toScale$FNR_sd, 0),
+         errR2 = coalesce((errR - toScale$errR_mean) / toScale$errR_sd, 0),
+         w.FPR2 = coalesce((w.FPR - toScale$w.FPR_mean) / toScale$w.FPR_sd, 0),
+         w.FNR2 = coalesce((w.FNR - toScale$w.FNR_mean) / toScale$w.FNR_sd, 0),
+         w.errR2 = coalesce((w.errR - toScale$w.errR_mean) / toScale$errR_sd, 0))
 
-set.seed(892748923)
-kMeans2 <- data1 %>% select(-(1:2)) %>% kmeans(2, nstart = 20)
+set.seed(8927489)
+kMeans2 <- data1 %>% select(11:18) %>% kmeans(2, nstart = 20)
 data1[['cluster1']] <- kMeans2$cluster
+data1 <- data1 %>% mutate(cluster1 = if_else(cluster1 == 1, 'good', 'bad'))
 kMeans2
 ```
 
-When creating this cluster, we can see that the clustering accounts for 28.4% of the sum of squares.
+When creating this cluster, we can see that the clustering accounts for 28.4% of the sum of squares.  We can also see that cluster 1 is the "good" cluster, since the cluster means are lower.
 
 We can also weight each point by the number of exams by expanding each Provider to the size of it's number of exams.
 
 ```{r}
-data2 <- data1 %>% expandRows('nExams')
+data2 <- data1 %>% select(c(1:2, 11:18)) %>% expandRows('nExams')
 kMeans2a <- data2 %>%
-  select(-Provider.ID, -cluster1) %>%
+  select(-Provider.ID) %>%
   kmeans(2, nstart = 20)
 data2[['cluster2']] <- kMeans2a$cluster
-clust2 <- data2 %>% distinct(Provider.ID, cluster2)
+clust2 <- data2 %>% distinct(Provider.ID, cluster2) %>%
+  mutate(cluster2 = if_else(cluster2 == 1, 'good', 'bad'))
 data1 <- data1 %>% left_join(clust2, by = "Provider.ID")
 kMeans2a
 ```
 
 Here, we account for 28.8% of the sum of squares, which is negligably higher.
+
+```{r}
+ggplot(data1, aes(x = RadPeer.Score, y = Technical.Performance.Score, size = nExams, color = cluster2)) +
+  geom_point() +
+  theme_light() +
+  labs(title = 'Scatter plot of Provider Score Means', size = '# Exams', color = 'Cluster')
+```
+
 
 ### Look at Other Features
 
@@ -272,5 +282,17 @@ Here, we account for 28.8% of the sum of squares, which is negligably higher.
 SubSpecial <- data1 %>%
   select(Provider.ID, cluster1, cluster2) %>%
   inner_join(subspecial_data, by = 'Provider.ID')
+SubSpecial %>% count(Is.Subspecialized, cluster1) %>% mutate(pct = percent(n/sum(n))) %>% knitr::kable(align = 'c')
+SubSpecial %>% count(Is.Subspecialized, cluster2) %>% mutate(pct = percent(n/sum(n))) %>% knitr::kable(align = 'c')
+```
+
+Looking at subspecializations, there seems to be a notable difference, especially with the cluster 2 -- where less than 65% of the non-subspecialized providers are "good", but almost 80% of the sub-specialized ones are good
+
+
+```{r}
+equipData <- data1 %>%
+  select(Provider.ID, cluster1, cluster2) %>%
+  inner_join(equipment_data, by = 'Provider.ID')
+
 ```
 
