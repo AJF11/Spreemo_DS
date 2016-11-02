@@ -1,5 +1,5 @@
 ---
-title: "Data Analysis of Exam Data"
+title: "Data Analysis of Radiology Exam Data"
 author: "Alan Feder"
 date: "November 1, 2016"
 output:
@@ -36,10 +36,7 @@ I like to start out by loading all necessary external packages.
 library(dtplyr)
 library(data.table)
 library(splitstackshape)
-library(ggplot2)
-library(tidyr)
-library(readr)
-library(dplyr)
+library(tidyverse)
 library(stringr)
 library(scales)
 library(boot)
@@ -64,10 +61,10 @@ names(subspecial_data)
 Let's start by taking a quick glance at the exam data file.
 
 ```{r}
-head(exam_data, 10) %>% as.data.frame()
+head(exam_data) %>% as.data.frame()
 ```
 
-So we can see that the first column is an Exam ID, the second column is a Provider IS.  We can see that there are sometimes multiple Reviewer IDs for one exam.  We can also see that there are a number of missing variables.
+We can see that the first column is an Exam ID, and that the second column is a Provider ID.  We can also see that there are sometimes multiple Reviewer IDs for one exam.  Moreover,  some variables have missing data.  I want to see how common that is.
 
 ```{r}
 exam_data %>%
@@ -81,9 +78,9 @@ I also wanted to see how many claims have multiple reviews.
 
 ```{r}
 exam_data %>%
-  count(Exam.ID, Provider.ID) %>%
+  count(Exam.ID, Provider.ID) %>% #this part shows the number of instances of each Exam/Provider combination
   ungroup %>%
-  count(n) %>%
+  count(n) %>% # this part shows how many times we see a given number of Exam/Provider combinations
   mutate(pct = percent(nn/ sum(nn))) %>%
   knitr::kable(align = 'c')
 ```
@@ -95,9 +92,9 @@ I want to look at the claims with multiple ratings.
 ```{r}
 exam_data %>%
   count(Exam.ID, Provider.ID) %>%
-  filter(n >1) %>%
+  filter(n > 1) %>% # only looking at exams that show up more than once
   semi_join(exam_data, ., by = c("Exam.ID", "Provider.ID")) %>%
-  select(c(1:3,13:16)) %>%
+  select(c(1:3,13:16)) %>% # only looking at the columns that do not represent what the reviewer put in
   group_by(Exam.ID, Provider.ID) %>%
   summarize_all(n_distinct) %>%
   ungroup %>%
@@ -105,7 +102,7 @@ exam_data %>%
   colSums
 ```
 
-Luckily, each exam has two different reviewer IDs, and the Sex, Age, and body part are the same across all reviewers for the same exam. This could have been a source of data errors, but it seems to be complete.
+Luckily, each exam has two different reviewer IDs - if a claim had shown up twice with the same reviewer ID, which may have indicated an error, the number would not equal 186 * 2 = 372.  The Sex, Age, and body part are the same across all reviewers for the same exam. This could have been a source of data errors, but it seems to be complete.
 
 #### Feature Creation
 
@@ -119,14 +116,13 @@ exam_data <- exam_data %>%
          FPR = False.Positive.Count / Neg.Count,
          FNR = False.Negative.Count / Pos.Count,
          errR = Total.Diagnostic.Errors / Tot.Count,
-         sigErr = as.numeric(coalesce(RadPeer.Significance.of.Errors, 0L)),
+         sigErr = coalesce(RadPeer.Significance.of.Errors, 0L),
          w.FPR = sigErr * FPR,
          w.FNR = sigErr * FNR,
          w.errR = sigErr * errR)
 ```
 
-
-Therefore, to make sure each exam has equal weighting, I average the data for each exam that shows up multiple times. 
+To make sure each exam has equal weighting, I average the data for each exam that shows up multiple times. 
 
 ```{r}
 each_exam_data1 <- exam_data %>%
@@ -139,7 +135,7 @@ each_exam_data1 <- exam_data %>%
   inner_join(each_exam_data1, by = c("Exam.ID", "Provider.ID"))
 ```
 
-Now we can aggregate the exam date across each provider. I will use the mean to average them. 
+Now we can aggregate the exam date across each provider by averaging the variables.
 
 ```{r}
 ProviderSummary <- each_exam_data1 %>% 
@@ -152,9 +148,7 @@ ProviderSummary <- each_exam_data1 %>%
   inner_join(ProviderSummary, by = "Provider.ID")
 ProviderSummary <- each_exam_data1 %>% 
   group_by(Provider.ID) %>%
-  summarize_at(vars(Total.Diagnostic.Errors, False.Positive.Count,
-                    False.Negative.Count, True.Negative.Count, 
-                    True.Positive.Count, Neg.Count, Pos.Count, Tot.Count), 
+  summarize_at(vars(Total.Diagnostic.Errors, ends_with('.Count')), 
                sum, na.rm = T) %>%
   inner_join(ProviderSummary, ., by = 'Provider.ID')
 ProviderSummary <- each_exam_data1 %>% 
@@ -168,9 +162,13 @@ ProviderSummary <- each_exam_data1 %>%
   inner_join(ProviderSummary, ., by = 'Provider.ID')
 ```
 
-####More Exploration
+I calculated the error rate statistics using weighted average, since I wanted to make sure that getting 20 out of 20 correct on  one exam, but 0 out of 2 on a different exam doesn't lead to a $(0.5*\frac{20}{20})+(0.5*\frac{0}{2})=0.5*1+0.5*0=0.5$ score -- it should be $\frac{20+0}{20+2}=\frac{20}{22}=.909$.
 
-I want to start by looking at `RadPeer.Score` and `Technical.Performance.Score`, since the other measures have missing variables for many providers.  Before doing anything complicated, I am curious to look at the correlation between the two measures.
+This data frame represents the summary feature values for all providers.
+
+#### More Exploration
+
+I want to start by looking at `RadPeer.Score` and `Technical.Performance.Score`, since these are the measures that are directly assigned by reviewers.  Before doing anything complicated, I am curious to look at the correlation between the two measures.
 
 ```{r}
 ProviderSummary %>% 
@@ -181,14 +179,14 @@ ProviderSummary %>%
 
 ```{r}
 ProviderSummary %>% 
-  ggplot(data = ., mapping = aes(x = RadPeer.Score, y = Technical.Performance.Score)) +
+  ggplot(aes(x = RadPeer.Score, y = Technical.Performance.Score)) +
   geom_point() +
   geom_smooth(method = 'lm', se = FALSE) + 
   theme_light() +
   labs(title = 'Scatter plot of Provider Score')
 ```
 
-These correlations are surprisingly low to me - while a positive correlation does make more sense than a negative one, I'd have expected it to be closer to 1 than it actually is.
+These correlations are surprisingly low to me.  While a positive correlation does make more sense than a negative one, I'd have expected it to be closer to 1 than it actually is.
 
 One problem may be the many Providers that have very few exams, while others have many more.
 
@@ -196,7 +194,21 @@ One problem may be the many Providers that have very few exams, while others hav
 summary(ProviderSummary$nExams)
 ```
 
-While 25% of Providers have only 1 exam, a different 25% have 6 or more exams, with one provider having as many as 56.  Now, I'd like to consider looking at the correlation statistic weighted by # of exams.
+```{r}
+ht = max(count(ProviderSummary, nExams)$n) * 1.05 
+ggplot(ProviderSummary, aes(x = nExams)) + 
+  geom_histogram(binwidth = 1) +
+  scale_x_continuous(expand = c(0, 0))+
+  scale_y_continuous(expand = c(0, 0)) +
+  coord_cartesian(xlim = c(0, 60), ylim = c(0, ht))+
+  theme_light() +
+  labs(title = 'Histogram of # of Exams per provider', x = '# of Exams per provider', y = '# of Providers')
+```
+
+
+While 25% of Providers have only 1 exam, a different 25% have 6 or more exams, with one provider having as many as 56.  
+
+Now, I'd like to consider looking at the correlation statistic weighted by # of exams.
 
 ```{r}
 ProviderSummary %>% 
@@ -217,7 +229,7 @@ ProviderSummary %>%
   labs(title = 'Scatter plot of Provider Score Means', size = '# Exams')
 ```
 
-One interesting thing we can see from this scatter plot is that there are a lot of providers with scores clustered around 1.0 to 1.5 in both metrics, including some of those with the most exams.
+One interesting thing we can see from this scatter plot is that there are a lot of providers with scores clustered around 1.0 to 1.5 in both metrics, including some of those with the highest number of exams.
 
 The following is a look at weighted correlations between the official metrics (`RadPeer` and `Technical.Performance`) and the ones I created.
 
@@ -230,25 +242,27 @@ corrWRP <- function(score1, col1, col2){
     corr(w = df1[[col2]]) %>%
     round(3) %>%
     paste0('Weighted Correlation between ', score1,' and ', col1, ': ', .)
-}
+} 
 ```
 
 ```{r}
-corrWRP('RadPeer.Score', 'FPR', 'Neg.Count')
-corrWRP('RadPeer.Score', 'w.FPR', 'Neg.Count')
-corrWRP('RadPeer.Score', 'FNR', 'Pos.Count')
-corrWRP('RadPeer.Score', 'w.FNR', 'Pos.Count')
-corrWRP('RadPeer.Score', 'errR', 'Tot.Count')
-corrWRP('RadPeer.Score', 'w.errR', 'Tot.Count')
+cols2 <- tibble(col1 = c('FPR', 'FNR', 'errR'), 
+                col2 = c('Neg', 'Pos', 'Tot'), 
+                m1 = 1) %>% 
+  mutate(col2 = paste0(col2, '.Count'))
+cols2 <- cols2 %>% 
+  mutate(col1 = paste0('w.', col1)) %>%
+  bind_rows(cols2, .)
+cols2 <- tibble(score1 = c('RadPeer', 'Technical.Performance'), m1 = 1) %>%
+  mutate(score1 = paste0(score1, '.Score')) %>%
+  inner_join(cols2, by = 'm1') %>%
+  select(-m1)
+# This table shows all the possibilities I want to calculate the weighted correlations for.
 ```
 
+
 ```{r}
-corrWRP('Technical.Performance.Score', 'FPR', 'Neg.Count')
-corrWRP('Technical.Performance.Score', 'w.FPR', 'Neg.Count')
-corrWRP('Technical.Performance.Score', 'FNR', 'Pos.Count')
-corrWRP('Technical.Performance.Score', 'w.FNR', 'Pos.Count')
-corrWRP('Technical.Performance.Score', 'errR', 'Tot.Count')
-corrWRP('Technical.Performance.Score', 'w.errR', 'Tot.Count')
+apply(cols2, 1, function(x) corrWRP(x['score1'], x['col1'], x['col2']))
 ```
 
 There are two things interesting to me about these correlations:
@@ -266,8 +280,8 @@ Now let's try to do a little clustering.  First, we will impute the missing valu
 ```{r}
 toScale <- ProviderSummary %>%
   summarize_at(vars(RadPeer.Score, Technical.Performance.Score, 
-                    FPR, w.FPR, FNR, w.FNR, errR, w.errR), funs(mean, sd), na.rm = T)
-
+                    FPR, w.FPR, FNR, w.FNR, errR, w.errR), 
+               funs(mean, sd), na.rm = T)
 data1 <- ProviderSummary %>%
   select(Provider.ID, nExams, RadPeer.Score, Technical.Performance.Score,
          FPR, w.FPR, FNR, w.FNR, errR, w.errR) %>%
@@ -280,6 +294,8 @@ data1 <- ProviderSummary %>%
          w.FNR2 = coalesce((w.FNR - toScale$w.FNR_mean) / toScale$w.FNR_sd, 0),
          w.errR2 = coalesce((w.errR - toScale$w.errR_mean) / toScale$errR_sd, 0))
 ```
+
+Now we will create the clusters.
 
 ```{r}
 set.seed(8927489)
@@ -304,7 +320,7 @@ kMeans2a <- data2 %>%
 kMeans2a
 ```
 
-Here, we account for 28.8% of the sum of squares, which is negligably higher.  It is also more balanced, as `r scales::percent(kMeans2a$size[[2]]/sum(kMeans2a$size))` of the providers are in the smaller bucket, as opposed to `r scales::percent(kMeans2$size[[2]]/sum(kMeans2$size))` in the larger bucket.  Bucket 1 is the "good" cluster again.
+Here, we account for 28.8% of the sum of squares, which is negligably higher.  It is also more balanced, as `r scales::percent(kMeans2a$size[[2]]/sum(kMeans2a$size))` of the providers are in the smaller bucket, as opposed to `r scales::percent(kMeans2$size[[2]]/sum(kMeans2$size))` in the larger bucket.  Cluster 1 is the "good" cluster again.
 
 ```{r}
 data2[['cluster2']] <- kMeans2a$cluster
@@ -315,22 +331,28 @@ data1 <- data1 %>% left_join(clust2, by = "Provider.ID")
 
 
 ```{r}
+# We first calculate the centroids of the clusters, and unscale/uncenter them to put them on the same range as the original data.
 centers1 <- kMeans2a$centers[,1:2] %>% 
   data.frame %>%
-  mutate(RadPeer.Score = (RadPeer.Score2 * toScale$RadPeer.Score_sd) + toScale$RadPeer.Score_mean, 
-         Technical.Performance.Score = (Technical.Performance.Score2 * toScale$Technical.Performance.Score_sd) + toScale$Technical.Performance.Score_mean,
+  mutate(RadPeer.Score = (RadPeer.Score2 * toScale$RadPeer.Score_sd) + 
+           toScale$RadPeer.Score_mean, 
+         Technical.Performance.Score = (Technical.Performance.Score2 *
+                                          toScale$Technical.Performance.Score_sd) +
+           toScale$Technical.Performance.Score_mean,
          cluster2 = c('good', 'bad'))
-ggplot(data1, aes(x = RadPeer.Score, y = Technical.Performance.Score, color = cluster2)) +
+data1 %>%
+  ggplot(aes(RadPeer.Score, Technical.Performance.Score, color = cluster2)) +
   geom_point(aes(size = nExams)) +
   theme_light() +
   geom_point(data = centers1, aes(RadPeer.Score, Technical.Performance.Score),
-             shape = 10, size= 4, color = c('darkblue', 'darkred')) +
-  labs(title = 'Scatter plot of Provider Score Means', size = '# Exams', color = 'Cluster')
+             shape = 13, size= 4, color = c('darkblue', 'darkred')) +
+  labs(title = 'Scatter plot of Provider Score Means', 
+       size = '# Exams', color = 'Cluster')
 ```
 
-The darker bulls-eyes in the graph above represents the centroids of the clusters.
+The darker marks in the graph above represents the centroids of the clusters.
 
-### Compare clusters to other characteristics of the Providers
+### Analyze clusters with other Provider characteristics
 
 #### Subspecializations
 
@@ -345,7 +367,7 @@ SubSpecial %>%
   knitr::kable(align = 'c')
 ```
 
-Looking at subspecializations, there seems to be a notable difference, where less than 65% of the non-subspecialized providers are "good", but almost 80% of the sub-specialized ones are good
+Looking at subspecializations, there seems to be a notable difference, where less than 65% of the non-subspecialized providers are "good" but almost 80% of the sub-specialized ones are "good".
 
 #### MRI Equipment
 
@@ -362,7 +384,7 @@ equipData %>%
   knitr::kable(align = 'c')
 ```
 
-There seem to be more significant connections between `MRI.machine.type` and cluster2, where 90.9% of Stand-Up machines get clustered as bad, while 83.1% of Semi-Open Wide Bore machines get clustered as good.  Open machines seem to be a bit more mixed, at 65% good, Closed machines are almost as good as Semi-Open Wide Bore machines, and there are not enough Extremity machines to get a good look
+There seem to be a more significant correlation between `MRI.machine.type` and `cluster2` than there was with the other factors. 90.9% of Stand-Up machines get clustered as bad, while 83.1% of Semi-Open Wide Bore machines get clustered as good.  Open machines seem to be a bit more mixed at 65% good. Closed machines are almost as good as Semi-Open Wide Bore machines, and there are not enough Extremity machines to get a good look.
 
 ##### MRI Magnet Strength
 
@@ -380,7 +402,9 @@ equipData %>%
        y = '')
 ```
 
-Looking at a smoothed density plot, the distribution of Magnet Strength between the two clusters are fairly similar, although the 'good' cluster seems to be a bit higher.
+Based on the smoothed density plot, the distribution of Magnet Strength between the two clusters are fairly similar, although the 'good' cluster seems to be a bit higher.
+
+I wanted to look at this a bit more deeply, so I built a logistic regression using `MRI.magnet.strength` to attempt to predict the cluster.
 
 ```{r}
 logReg1 <- equipData %>%
@@ -389,26 +413,24 @@ logReg1 <- equipData %>%
       formula = cluster2 ~ MRI.magnet.strength, 
       family = binomial,
       weights = nExams)
-plotData <- data.frame(MRI.magnet.strength = seq(0.2, 3, 0.01))
+plotData <- data.frame(MRI.magnet.strength = seq(0.2, 3, 0.01)) # dummy data for plotting
 plotData <- predict(logReg1, newdata = plotData, type = 'response') %>%
   as.data.frame %>% bind_cols(plotData, .) %>%
-  setNames(c('MRI.magnet.strength', 'fitted.y'))
+  setNames(c('MRI.magnet.strength', 'fitted.y')) # fitting the logistic regression on the dummy data
 equipData %>%
   mutate(cluster2 = if_else(cluster2 == 'good', 1, 0)) %>%
   ggplot(aes(x = MRI.magnet.strength, y = cluster2))+
   geom_jitter(height = 0.1, width = 0, alpha = 0.1, aes(size = nExams)) +
+# I used the jitter function to show the multiple providers at any given Magnet Strength, and used the opacity to show where they congregated.
   geom_line(data = plotData, 
             aes(x = MRI.magnet.strength, y = fitted.y, color = 'fitted\nlogistic')) +
   theme_light() +
   labs(title = 'Jitter plot with fitted logistic regression curve',
        size = '# Exams', y = 'Cluster 2 ("good" = 1)', color = '')
-
 ```
 
-This logistic regression makes it a bit more obvious that a higher magnet strength leads to a higher likelihood of being classifies 'good'.
+This logistic regression makes it a bit more obvious that a higher magnet strength leads to a higher likelihood of being classified 'good'.
 
 ### Conclusion
 
-
-
-
+Using a combination of reviewer provided scores and error rates, we can cluster the providers into "good" and "bad" buckets, although most end up in the "good" bucket, even when we give extra weight to those providers with more exams.  The clusters correlate to other features of the providers as well, such as whether they sub-specialize, which type of MRI machines they use, and how strong the MRI magnets are.
